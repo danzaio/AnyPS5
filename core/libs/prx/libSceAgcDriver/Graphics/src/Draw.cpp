@@ -753,14 +753,10 @@ DrawInputCopy CopyDrawInput(const Context& context, Recorder* recorder, std::uin
     return copy;
 }
 
-DrawInputCopy CopyZeroPaddedDrawInput(const Context& context, Recorder* recorder, std::uint64_t address, std::size_t bytes, std::size_t validBytes) {
+DrawInputCopy CopyZeroPaddedDrawInput(const Context& context, std::uint64_t address, std::size_t bytes, std::size_t validBytes) {
     Require(validBytes <= bytes, "the valid bytes of a vertex fetch exceed the fetch");
+    GuestMemory::FlushGpuWrites(address, bytes);
     DrawInputCopy copy;
-    if (recorder != nullptr && bytes != 0) {
-        GuestMemory::FlushGpuWrites(address, bytes);
-        copy.registryGeneration = GuestAllocations::GuestAllocationsGeneration_nid_postfix();
-        copy.generation = GuestMemory::CollectWrites(address, bytes);
-    }
     copy.buffer = std::make_shared<Buffer>(context, bytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
     const auto span = copy.buffer->Bytes();
     GuestMemory::Read(address, span.subspan(0, validBytes), 1);
@@ -941,8 +937,7 @@ DrawInputs prepareDrawInputs(const Context& context, const State& state, const P
     for (const auto i : soloAttribute) {
         const auto begin = fetches[i].begin;
         const auto bytes = static_cast<std::size_t>(fetches[i].end - begin);
-        auto copy = CopyZeroPaddedDrawInput(context, context.recorder, begin, bytes, fetchValid[i]);
-        KeepDrawInput(context.recorder, begin, copy, Recorder::SnapshotUse::Vertex, 0);
+        auto copy = CopyZeroPaddedDrawInput(context, begin, bytes, fetchValid[i]);
         bufferOf[i] = inputs.vertexBuffers.size();
         inputs.vertexBuffers.push_back(std::move(copy.buffer));
     }

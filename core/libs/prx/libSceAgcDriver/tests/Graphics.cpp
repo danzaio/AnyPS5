@@ -2514,6 +2514,15 @@ void validationTests() {
         Require(AgcDriver::Graphics::VertexBufferReadSize(attribute, 0, 2, 2) == 112, "a first instance past the records still spans its fetch");
         expectFailure([&] { AgcDriver::Graphics::VertexBufferReadSize(attribute, 0, 2, 0xffffffffu); }, "instance range overflow");
         Require(AgcDriver::Graphics::VertexBufferReadSize(attribute, 0, 4) == 112, "an instance range past the records still spans its fetch");
+        attribute.fetchIndex = 0;
+        attribute.resource.fields[3] = 0x1004dfacu;
+        Require(AgcDriver::Graphics::VertexBufferReadSize(attribute, 3, 1) == 112, "oob_select 1 past the records still spans its fetch");
+        attribute.resource.fields[3] = 0x2004dfacu;
+        expectFailure([&] { AgcDriver::Graphics::VertexBufferReadSize(attribute, 3, 1); }, "record count");
+        attribute.resource.fields[3] = 0x3004dfacu;
+        expectFailure([&] { AgcDriver::Graphics::VertexBufferReadSize(attribute, 3, 1); }, "record count");
+        attribute.resource.fields[3] = 77u << 12u;
+        attribute.fetchIndex = 1;
         attribute.resource.fields[1] = 0;
         attribute.resource.fields[2] = 16;
         Require(AgcDriver::Graphics::VertexBufferReadSize(attribute, 100, 2) == 16, "zero stride must repeat one value");
@@ -2780,7 +2789,7 @@ void vertexZeroFillTests() {
     std::vector<std::byte> guest(extent);
     std::fill(guest.begin(), guest.begin() + static_cast<std::ptrdiff_t>(valid), std::byte{0x7a});
     std::fill(guest.begin() + static_cast<std::ptrdiff_t>(valid), guest.end(), std::byte{0x55});
-    const auto copy = CopyZeroPaddedDrawInput(mockContext(), nullptr, reinterpret_cast<std::uint64_t>(guest.data()), extent, valid);
+    const auto copy = CopyZeroPaddedDrawInput(mockContext(), reinterpret_cast<std::uint64_t>(guest.data()), extent, valid);
     const auto bytes = copy.buffer->Bytes();
     Require(bytes.size() == extent, "a zero-padded vertex fetch changed its size");
     Require(std::all_of(bytes.begin(), bytes.begin() + static_cast<std::ptrdiff_t>(valid), [](std::byte value) { return value == std::byte{0x7a}; }), "a vertex fetch did not copy the bytes within the record count");
