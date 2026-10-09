@@ -194,6 +194,15 @@ inline VertexCopyPlan PlanVertexCopies(std::span<const VertexFetch> fetches) {
     return plan;
 }
 
+inline std::vector<std::size_t> SoloZeroPaddedFetchIndices(const std::vector<VertexFetch>& fetches, const std::vector<std::size_t>& fetchValid) {
+    Require(fetchValid.size() == fetches.size(), "fetch validity does not match the fetch count");
+    std::vector<std::size_t> solo;
+    for (std::size_t i = 0; i < fetches.size(); ++i) {
+        if (fetchValid[i] < fetches[i].end - fetches[i].begin) solo.push_back(i);
+    }
+    return solo;
+}
+
 }
 
 #endif

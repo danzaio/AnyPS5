@@ -911,26 +911,44 @@ DrawInputs prepareDrawInputs(const Context& context, const State& state, const P
         const auto recordBytes = static_cast<std::uint64_t>(fields[2]) * stride;
         fetchValid.push_back(args == nullptr && stride != 0 ? static_cast<std::size_t>(std::min(recordBytes, static_cast<std::uint64_t>(bytes))) : bytes);
     }
-    const auto plan = PlanVertexCopies(fetches);
-    std::vector<std::size_t> copyValid(plan.copies.size(), 0);
-    for (std::size_t i = 0; i < fetches.size(); ++i) copyValid[plan.copyOf[i]] = std::max(copyValid[plan.copyOf[i]], fetchValid[i]);
-    for (std::size_t c = 0; c < plan.copies.size(); ++c) {
-        const auto begin = plan.copies[c].first;
-        const auto end = plan.copies[c].second;
-        const auto bytes = static_cast<std::size_t>(end - begin);
-        const auto valid = static_cast<std::size_t>(std::min(begin + copyValid[c], end) - begin);
-        DrawInputCopy copy;
-        if (valid == bytes) {
-            copy = CopyDrawInput(context, context.recorder, begin, bytes, 1, Recorder::SnapshotUse::Vertex);
-        } else {
-            copy = CopyZeroPaddedDrawInput(context, context.recorder, begin, bytes, valid);
+    const auto soloAttribute = SoloZeroPaddedFetchIndices(fetches, fetchValid);
+    std::vector<bool> isSolo(attributes.size(), false);
+    for (const auto i : soloAttribute) isSolo[i] = true;
+    std::vector<VertexFetch> plannedFetches;
+    plannedFetches.reserve(fetches.size());
+    std::vector<std::size_t> plannedAttribute;
+    plannedAttribute.reserve(fetches.size());
+    for (std::size_t i = 0; i < fetches.size(); ++i) {
+        if (!isSolo[i]) {
+            plannedAttribute.push_back(i);
+            plannedFetches.push_back(fetches[i]);
         }
+    }
+    const auto plan = PlanVertexCopies(plannedFetches);
+    std::vector<std::size_t> bufferOf(attributes.size(), 0);
+    std::vector<std::size_t> offsetOf(attributes.size(), 0);
+    for (std::size_t j = 0; j < plannedAttribute.size(); ++j) {
+        bufferOf[plannedAttribute[j]] = plan.copyOf[j];
+        offsetOf[plannedAttribute[j]] = plan.offsets[j];
+    }
+    for (const auto& [begin, end] : plan.copies) {
+        const auto bytes = static_cast<std::size_t>(end - begin);
+        GuestMemory::CheckRange(reinterpret_cast<const void*>(begin), bytes, 1);
+        auto copy = CopyDrawInput(context, context.recorder, begin, bytes, 1, Recorder::SnapshotUse::Vertex);
         KeepDrawInput(context.recorder, begin, copy, Recorder::SnapshotUse::Vertex, 0);
         inputs.vertexBuffers.push_back(std::move(copy.buffer));
     }
+    for (const auto i : soloAttribute) {
+        const auto begin = fetches[i].begin;
+        const auto bytes = static_cast<std::size_t>(fetches[i].end - begin);
+        auto copy = CopyZeroPaddedDrawInput(context, context.recorder, begin, bytes, fetchValid[i]);
+        KeepDrawInput(context.recorder, begin, copy, Recorder::SnapshotUse::Vertex, 0);
+        bufferOf[i] = inputs.vertexBuffers.size();
+        inputs.vertexBuffers.push_back(std::move(copy.buffer));
+    }
     for (std::size_t i = 0; i < attributes.size(); ++i) {
-        inputs.vertexHandles.push_back(inputs.vertexBuffers[plan.copyOf[i]]->Handle());
-        inputs.vertexOffsets[i] = plan.offsets[i];
+        inputs.vertexHandles.push_back(inputs.vertexBuffers[bufferOf[i]]->Handle());
+        inputs.vertexOffsets[i] = offsetOf[i];
     }
     timer.phase(PhaseVertex);
     return inputs;

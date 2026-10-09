@@ -2787,6 +2787,17 @@ void vertexZeroFillTests() {
     Require(std::all_of(bytes.begin() + static_cast<std::ptrdiff_t>(valid), bytes.end(), [](std::byte value) { return value == std::byte{0}; }), "a vertex fetch past the record count did not read as zeros");
 }
 
+void vertexZeroFillMergeTests() {
+    using AgcDriver::Graphics::PlanVertexCopies;
+    using AgcDriver::Graphics::SoloZeroPaddedFetchIndices;
+    using AgcDriver::Graphics::VertexFetch;
+    const std::vector<VertexFetch> fetches{{0x1000u, 0x1000u + 88u, 24u, 0u, 4u}, {0x1010u, 0x1010u + 80u, 24u, 0u, 4u}};
+    Require(PlanVertexCopies(fetches).copies.size() == 1, "interleaved attributes share one vertex copy");
+    Require(SoloZeroPaddedFetchIndices(fetches, {88u, 80u}).empty(), "fully valid fetches share the straight copy");
+    const auto solo = SoloZeroPaddedFetchIndices(fetches, {88u, 72u});
+    Require(solo.size() == 1 && solo[0] == 1, "a fetch past the records is copied alone");
+}
+
 int main() {
 #ifdef _WIN32
     _putenv_s("APS5_PIN_WAIT_MS", "200");
@@ -2859,6 +2870,7 @@ int main() {
         validationTests();
         vertexCopyTests();
         vertexZeroFillTests();
+        vertexZeroFillMergeTests();
         pixelParameterSlotTests();
         rectListTests();
         mock = MockVulkan{};
