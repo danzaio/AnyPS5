@@ -753,6 +753,21 @@ DrawInputCopy CopyDrawInput(const Context& context, Recorder* recorder, std::uin
     return copy;
 }
 
+DrawInputCopy CopyZeroPaddedDrawInput(const Context& context, Recorder* recorder, std::uint64_t address, std::size_t bytes, std::size_t validBytes) {
+    Require(validBytes <= bytes, "the valid bytes of a vertex fetch exceed the fetch");
+    DrawInputCopy copy;
+    if (recorder != nullptr && bytes != 0) {
+        GuestMemory::FlushGpuWrites(address, bytes);
+        copy.registryGeneration = GuestAllocations::GuestAllocationsGeneration_nid_postfix();
+        copy.generation = GuestMemory::CollectWrites(address, bytes);
+    }
+    copy.buffer = std::make_shared<Buffer>(context, bytes, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+    const auto span = copy.buffer->Bytes();
+    GuestMemory::Read(address, span.subspan(0, validBytes), 1);
+    std::fill(span.begin() + static_cast<std::ptrdiff_t>(validBytes), span.end(), std::byte{0});
+    return copy;
+}
+
 void KeepDrawInput(Recorder* recorder, std::uint64_t address, const DrawInputCopy& copy, Recorder::SnapshotUse use, std::uint32_t derived) {
     if (recorder == nullptr || copy.reused || copy.generation == 0 || copy.buffer == nullptr) return;
     recorder->KeepDrawSnapshot(address, copy.buffer->Bytes().size(), copy.generation, copy.registryGeneration, copy.buffer, use, derived);
@@ -882,20 +897,34 @@ DrawInputs prepareDrawInputs(const Context& context, const State& state, const P
         inputs.maxIndex += draw.firstVertex;
     }
     std::vector<VertexFetch> fetches;
+    std::vector<std::size_t> fetchValid;
     fetches.reserve(attributes.size());
+    fetchValid.reserve(attributes.size());
     for (const auto& attribute : attributes) {
         // An indirect draw's counts are unknown here: the descriptor's whole range is copied.
         const auto bytes = args != nullptr ? VertexBufferExtent(attribute) : VertexBufferReadSize(attribute, inputs.maxIndex, draw.instanceCount, draw.firstInstance);
         const auto& fields = attribute.resource.fields;
         const auto address = fields[0] | (static_cast<std::uint64_t>(fields[1] & 0xffffu) << 32u);
         Require(!state.hasColorTarget || address + bytes <= state.color.address || state.color.address + state.color.bytes <= address, "vertex buffer aliases the render target");
-        fetches.push_back({address, address + bytes, (fields[1] >> 16u) & 0x3fffu, attribute.fetchIndex, DecodeVertexFormat(attribute).alignment});
+        const auto stride = (fields[1] >> 16u) & 0x3fffu;
+        fetches.push_back({address, address + bytes, stride, attribute.fetchIndex, DecodeVertexFormat(attribute).alignment});
+        const auto recordBytes = static_cast<std::uint64_t>(fields[2]) * stride;
+        fetchValid.push_back(args == nullptr && stride != 0 ? static_cast<std::size_t>(std::min(recordBytes, static_cast<std::uint64_t>(bytes))) : bytes);
     }
     const auto plan = PlanVertexCopies(fetches);
-    for (const auto& [begin, end] : plan.copies) {
+    std::vector<std::size_t> copyValid(plan.copies.size(), 0);
+    for (std::size_t i = 0; i < fetches.size(); ++i) copyValid[plan.copyOf[i]] = std::max(copyValid[plan.copyOf[i]], fetchValid[i]);
+    for (std::size_t c = 0; c < plan.copies.size(); ++c) {
+        const auto begin = plan.copies[c].first;
+        const auto end = plan.copies[c].second;
         const auto bytes = static_cast<std::size_t>(end - begin);
-        GuestMemory::CheckRange(reinterpret_cast<const void*>(begin), bytes, 1);
-        auto copy = CopyDrawInput(context, context.recorder, begin, bytes, 1, Recorder::SnapshotUse::Vertex);
+        const auto valid = static_cast<std::size_t>(std::min(begin + copyValid[c], end) - begin);
+        DrawInputCopy copy;
+        if (valid == bytes) {
+            copy = CopyDrawInput(context, context.recorder, begin, bytes, 1, Recorder::SnapshotUse::Vertex);
+        } else {
+            copy = CopyZeroPaddedDrawInput(context, context.recorder, begin, bytes, valid);
+        }
         KeepDrawInput(context.recorder, begin, copy, Recorder::SnapshotUse::Vertex, 0);
         inputs.vertexBuffers.push_back(std::move(copy.buffer));
     }

@@ -2507,13 +2507,13 @@ void validationTests() {
         vertex.vertexAttributes[0].components = 2;
         expectFailure([&] { AgcDriver::Graphics::ValidateShaders(shaders, state, subgroup, false); }, "metadata disagrees");
         Require(AgcDriver::Graphics::VertexBufferReadSize(attribute, 2, 1) == 80, "incorrect strided vertex range");
-        expectFailure([&] { AgcDriver::Graphics::VertexBufferReadSize(attribute, 3, 1); }, "record count");
+        Require(AgcDriver::Graphics::VertexBufferReadSize(attribute, 3, 1) == 112, "an index past the records still spans its fetch");
         attribute.fetchIndex = 1;
         Require(AgcDriver::Graphics::VertexBufferReadSize(attribute, 100, 2) == 48, "instance attributes used the vertex index");
         Require(AgcDriver::Graphics::VertexBufferReadSize(attribute, 100, 2, 1) == 80, "first instance was ignored");
-        expectFailure([&] { AgcDriver::Graphics::VertexBufferReadSize(attribute, 0, 2, 2); }, "record count");
+        Require(AgcDriver::Graphics::VertexBufferReadSize(attribute, 0, 2, 2) == 112, "a first instance past the records still spans its fetch");
         expectFailure([&] { AgcDriver::Graphics::VertexBufferReadSize(attribute, 0, 2, 0xffffffffu); }, "instance range overflow");
-        expectFailure([&] { AgcDriver::Graphics::VertexBufferReadSize(attribute, 0, 4); }, "record count");
+        Require(AgcDriver::Graphics::VertexBufferReadSize(attribute, 0, 4) == 112, "an instance range past the records still spans its fetch");
         attribute.resource.fields[1] = 0;
         attribute.resource.fields[2] = 16;
         Require(AgcDriver::Graphics::VertexBufferReadSize(attribute, 100, 2) == 16, "zero stride must repeat one value");
@@ -2769,6 +2769,24 @@ void vertexCopyTests() {
     }
 }
 
+void vertexZeroFillTests() {
+    using AgcDriver::Graphics::CopyZeroPaddedDrawInput;
+    using AgcDriver::Graphics::VertexBufferReadSize;
+    constexpr std::uint32_t stride = 24;
+    constexpr std::uint32_t records = 3;
+    const ShaderRecompiler::VertexAttribute attribute{0, 4, {{0x1000u, stride << 16u, records, 77u << 12u}}, 0};
+    const auto extent = VertexBufferReadSize(attribute, records, 1);
+    const auto valid = static_cast<std::size_t>(stride) * records;
+    std::vector<std::byte> guest(extent);
+    std::fill(guest.begin(), guest.begin() + static_cast<std::ptrdiff_t>(valid), std::byte{0x7a});
+    std::fill(guest.begin() + static_cast<std::ptrdiff_t>(valid), guest.end(), std::byte{0x55});
+    const auto copy = CopyZeroPaddedDrawInput(mockContext(), nullptr, reinterpret_cast<std::uint64_t>(guest.data()), extent, valid);
+    const auto bytes = copy.buffer->Bytes();
+    Require(bytes.size() == extent, "a zero-padded vertex fetch changed its size");
+    Require(std::all_of(bytes.begin(), bytes.begin() + static_cast<std::ptrdiff_t>(valid), [](std::byte value) { return value == std::byte{0x7a}; }), "a vertex fetch did not copy the bytes within the record count");
+    Require(std::all_of(bytes.begin() + static_cast<std::ptrdiff_t>(valid), bytes.end(), [](std::byte value) { return value == std::byte{0}; }), "a vertex fetch past the record count did not read as zeros");
+}
+
 int main() {
 #ifdef _WIN32
     _putenv_s("APS5_PIN_WAIT_MS", "200");
@@ -2840,6 +2858,7 @@ int main() {
         meshIndexBufferTests();
         validationTests();
         vertexCopyTests();
+        vertexZeroFillTests();
         pixelParameterSlotTests();
         rectListTests();
         mock = MockVulkan{};

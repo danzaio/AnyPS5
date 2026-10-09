@@ -142,10 +142,9 @@ inline std::size_t VertexBufferReadSize(const ShaderRecompiler::VertexAttribute&
     Require(attribute.fetchIndex <= 1, "unsupported vertex fetch index");
     const auto index = attribute.fetchIndex == 0 ? maxIndex : firstInstance + instances - 1u;
     const auto bytes = DecodeVertexFormat(attribute).bytes;
-    Require(stride == 0 || index < records, "vertex fetch exceeds descriptor record count");
-    const auto available = stride == 0 ? static_cast<std::uint64_t>(records) : static_cast<std::uint64_t>(records) * stride;
     const auto required = static_cast<std::uint64_t>(stride) * index + bytes;
-    Require(required <= available && required <= std::numeric_limits<std::size_t>::max(), "vertex fetch exceeds descriptor byte range");
+    Require(stride != 0 || required <= static_cast<std::uint64_t>(records), "vertex fetch exceeds descriptor byte range");
+    Require(required <= std::numeric_limits<std::size_t>::max(), "vertex fetch exceeds addressable byte range");
     const auto address = attribute.resource.fields[0] | (static_cast<std::uint64_t>(attribute.resource.fields[1] & 0xffffu) << 32u);
     Require(address != 0 && required <= std::numeric_limits<std::uint64_t>::max() - address, "invalid vertex buffer address range");
     return static_cast<std::size_t>(required);
