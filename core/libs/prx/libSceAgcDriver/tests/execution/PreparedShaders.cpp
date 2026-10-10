@@ -256,7 +256,14 @@ void Registration(bool indirect) {
     swappcHeader.registers = {{{0x20c, static_cast<std::uint32_t>(swappcAddress >> 8u)}, {0x20d, static_cast<std::uint32_t>(swappcAddress >> 40u)}, {0x207, 2}, {0x208, 1}, {0x209, 1}, {0x212, 0}, {0x213, 0}, {0x207, 1}, {0x207, 1}}};
     char swappcAddressText[32];
     std::snprintf(swappcAddressText, sizeof(swappcAddressText), "0x%llx", static_cast<unsigned long long>(swappcAddress));
-    ExpectFailure([&] { AgcDriverRegisterShader_nid_postfix(&swappcHeader.shader); }, swappcAddressText);
+    try {
+        AgcDriverRegisterShader_nid_postfix(&swappcHeader.shader);
+    } catch (const std::exception& error) {
+        const std::string message = error.what();
+        Require(message.find(swappcAddressText) != std::string::npos && message.find("stage 0") != std::string::npos, error.what());
+        return;
+    }
+    throw std::runtime_error("unresolvable s_swappc_b64 call was accepted");
     std::vector<std::uint32_t> commands;
     for (const auto reg : header.registers) commands.insert(commands.end(), {0xc0017600u, reg.offset, reg.value});
     const std::array<std::uint32_t, 3> arguments{1, 1, 1};
