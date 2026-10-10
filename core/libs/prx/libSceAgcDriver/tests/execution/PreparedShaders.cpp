@@ -13,6 +13,7 @@
 #include <vector>
 #include <future>
 #include <barrier>
+#include <cstdio>
 
 namespace {
 
@@ -238,6 +239,24 @@ void Registration(bool indirect) {
     header.registers[threadRegisterIndex].value = 1;
     code[0] = 0xffffffffu;
     ExpectFailure([&] { AgcDriverRegisterShader_nid_postfix(&header.shader); }, "");
+    Header swappcHeader;
+    alignas(256) std::array<std::uint32_t, 2> swappcCode{0x80000000u | (0x7du << 23u) | (2u << 16u) | (0x21u << 8u) | 4u, 0xbf810000u};
+    const auto swappcAddress = reinterpret_cast<std::uintptr_t>(swappcCode.data());
+    swappcHeader.shader.file_header = 0x34333231u;
+    swappcHeader.shader.version = 0x18;
+    swappcHeader.shader.header_size = sizeof(swappcHeader);
+    swappcHeader.shader.shader_size = sizeof(swappcCode);
+    swappcHeader.shader.code = swappcCode.data();
+    swappcHeader.shader.sh_registers = swappcHeader.registers.data();
+    swappcHeader.shader.num_sh_registers = swappcHeader.registers.size();
+    swappcHeader.shader.cx_registers = swappcHeader.context.data();
+    swappcHeader.shader.num_cx_registers = swappcHeader.context.size();
+    swappcHeader.shader.specials = &swappcHeader.specials;
+    swappcHeader.specials.dispatch_modifier = 0x8000;
+    swappcHeader.registers = {{{0x20c, static_cast<std::uint32_t>(swappcAddress >> 8u)}, {0x20d, static_cast<std::uint32_t>(swappcAddress >> 40u)}, {0x207, 2}, {0x208, 1}, {0x209, 1}, {0x212, 0}, {0x213, 0}, {0x207, 1}, {0x207, 1}}};
+    char swappcAddressText[32];
+    std::snprintf(swappcAddressText, sizeof(swappcAddressText), "0x%llx", static_cast<unsigned long long>(swappcAddress));
+    ExpectFailure([&] { AgcDriverRegisterShader_nid_postfix(&swappcHeader.shader); }, swappcAddressText);
     std::vector<std::uint32_t> commands;
     for (const auto reg : header.registers) commands.insert(commands.end(), {0xc0017600u, reg.offset, reg.value});
     const std::array<std::uint32_t, 3> arguments{1, 1, 1};
