@@ -239,7 +239,14 @@ static void CheckUnspecifiedIpv6() {
     Require(sceNetInetPton(28, "::1", address.data() + 8) == 1);
 
     const char payload[] = "IPv6 wildcard receive";
-    Require(sceNetSendto(sender, payload, sizeof(payload), 0, address.data(), address.size()) == sizeof(payload));
+    const auto sent = sceNetSendto(sender, payload, sizeof(payload), 0, address.data(), address.size());
+    if (Failed(sent, 51)) {
+        Require(sceNetSocketClose(sender) == 0);
+        Require(sceNetSocketClose(receiver) == 0);
+        ipv6Unavailable = true;
+        return;
+    }
+    Require(sent == sizeof(payload));
     char received[sizeof(payload)]{};
     std::array<std::uint8_t, 28> peer{};
     size = peer.size();
@@ -430,7 +437,7 @@ int main() {
     Require(sceNetCtlGetState(&state) == 0);
     Require(state == 0 || state == 3);
     if (ipv6Unavailable) {
-        std::puts("skipped the IPv6 socket checks, the host has no IPv6");
+        std::puts("skipped the IPv6 socket checks, the host has no usable IPv6 loopback");
         return 77;
     }
 }
