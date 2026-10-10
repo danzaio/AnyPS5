@@ -11,6 +11,7 @@
 #include "prx/libSceAgcDriver/Execution/include/ShaderPreparationScope.hpp"
 #include "CompiledVariant.hpp"
 #include "Optimization/ResourceProgram.hpp"
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <list>
@@ -366,11 +367,22 @@ std::vector<PreparedShaders::Entry> PrepareRegistered(const ShaderSnapshot& snap
     std::vector<std::uint32_t> userData(userCount);
     if (stage != Stage::Compute && stage != Stage::Fragment && snapshot.type != 6) vertex = Graphics::DecodeVertexStageInfo(snapshot.header, snapshot.headerAddress, userData, nullptr, true);
     const ShaderRecompiler::SwappcInfo swappc{vertex.has_value(), firstUser, userCount};
-    auto graph = ShaderRecompiler::GraphBuilder{}.Build(decoded, &swappc);
-    ShaderRecompiler::Structurizer{}.Structurize(graph);
     const std::array<ShaderRecompiler::MemoryRegion, 2> memory{{{snapshot.codeAddress, std::as_bytes(std::span(snapshot.code))}, {snapshot.headerAddress, snapshot.header}}};
     ShaderRecompiler::RecompileRequest request{{stage, address, code, snapshot.headerAddress, snapshot.header}, {wave, firstUser, userData, compute, pixel, vertex, memory, RegisteredFloatMode(snapshot)}, stage == Stage::Compute ? device.ComputeTarget(wave) : device.Target(), {0, 0, 0, 128}, graphics};
     if (graphics && graphics->mesh) request.layout.pushConstantSizeBytes = ShaderRecompiler::MeshDrawPushOffsetBytes;
+    try {
+        auto graph = ShaderRecompiler::GraphBuilder{}.Build(decoded, &swappc);
+        ShaderRecompiler::Structurizer{}.Structurize(graph);
+    } catch (const std::exception& error) {
+        static const bool dumpShaders = std::getenv("APS5_DUMP_SHADERS") != nullptr;
+        const auto dump = dumpShaders ? Driver::dumpRequest(address, request) : std::string{};
+        std::string reason = error.what();
+        if (const auto newline = reason.find('\n'); newline != std::string::npos) reason.resize(newline);
+        char where[128];
+        if (dump.empty()) std::snprintf(where, sizeof(where), "registered shader 0x%llx stage %u: ", static_cast<unsigned long long>(address), static_cast<unsigned>(stage));
+        else std::snprintf(where, sizeof(where), "registered shader 0x%llx stage %u (%s): ", static_cast<unsigned long long>(address), static_cast<unsigned>(stage), dump.c_str());
+        throw std::runtime_error(where + reason);
+    }
     std::vector<PreparedShaders::Entry> entries;
     const auto append = [&] {
         PerformanceTimer timing("Shader.PrepareArtifact");
